@@ -120,62 +120,28 @@ impl<'src: 'run, 'run> InvocationParser<'src, 'run> {
           None
         };
 
-        let switch = if argument.starts_with("--") {
-          Switch::Long(name.into())
+        let switches = if argument.starts_with("--") {
+          vec![Switch::Long(name.into())]
         } else {
-          if name.chars().count() != 1 {
-            return Err(Error::MultipleShortOptions {
-              options: name.into(),
-            });
-          }
-          Switch::Short(name.chars().next().unwrap())
+          name.chars().map(Switch::Short).collect::<Vec<Switch>>()
         };
 
-        let index = match &switch {
-          Switch::Long(name) => long.get(name.as_str()),
-          Switch::Short(name) => short.get(name),
-        };
-
-        let Some(&index) = index else {
-          return Err(Error::UnknownOption {
-            recipe: recipe.name(),
-            option: switch,
-          });
-        };
-
-        let value = if let Some(flag_value) = &recipe.parameters[index].value {
-          if value.is_some() {
-            return Err(Error::FlagWithValue {
-              recipe: recipe.name(),
-              option: switch,
-            });
-          }
-          i += 1;
-          flag_value
-        } else if let Some(value) = value {
-          i += 1;
-          value
-        } else {
-          let Some(&value) = rest.get(i + 1) else {
-            return Err(Error::OptionMissingValue {
-              recipe: recipe.name(),
-              option: switch,
-            });
-          };
-          i += 2;
-          value
-        };
-
-        let group = &mut arguments[index];
-
-        if !group.is_empty() {
-          return Err(Error::DuplicateOption {
-            recipe: recipe.name(),
-            option: switch,
-          });
+        let count = switches.len();
+        for (index, switch) in switches.into_iter().enumerate() {
+          let last = index + 1 == count;
+          switch.apply(
+            recipe,
+            &long,
+            &short,
+            &mut arguments,
+            rest,
+            &mut i,
+            if last { value } else { None },
+            last,
+          )?;
         }
 
-        group.push((*value).into());
+        i += 1;
       } else {
         let Some(&index) = positional.get(positional_index) else {
           break;
@@ -204,14 +170,14 @@ impl<'src: 'run, 'run> InvocationParser<'src, 'run> {
       if let Some(name) = &parameter.long {
         return Err(Error::MissingOption {
           recipe: recipe.name(),
-          option: Switch::Long(name.into()),
+          switch: Switch::Long(name.into()),
         });
       }
 
       if let Some(name) = &parameter.short {
         return Err(Error::MissingOption {
           recipe: recipe.name(),
-          option: Switch::Short(*name),
+          switch: Switch::Short(*name),
         });
       }
 
@@ -227,7 +193,11 @@ impl<'src: 'run, 'run> InvocationParser<'src, 'run> {
           .iter()
           .filter(|p| p.is_required() && !p.is_option())
           .count(),
-        max: if recipe.parameters.iter().any(|p| p.kind.is_variadic()) {
+        max: if recipe
+          .parameters
+          .iter()
+          .any(|p| p.kind.is_variadic() && !p.is_option())
+        {
           usize::MAX - 1
         } else {
           recipe.parameters.iter().filter(|p| !p.is_option()).count()
@@ -236,7 +206,11 @@ impl<'src: 'run, 'run> InvocationParser<'src, 'run> {
     }
 
     for (group, parameter) in arguments.iter().zip(&recipe.parameters) {
-      for element in group.elements() {
+      if parameter.value.is_some() {
+        continue;
+      }
+
+      for element in group {
         parameter.check_pattern_match(recipe, element)?;
       }
     }
@@ -261,7 +235,9 @@ impl<'src: 'run, 'run> InvocationParser<'src, 'run> {
 
       if let Some(module) = current.modules.get(arg) {
         current = module;
-      } else if let Some(recipe) = current.get_recipe(arg) {
+      } else if let Some(alias) = current.module_aliases.get(arg) {
+        current = self.root.submodule(&alias.target).unwrap();
+      } else if let Some(recipe) = current.recipe(arg) {
         if modulepath && i + 1 < args.len() {
           return Err(Error::ExpectedSubmoduleButFoundRecipe {
             path: path.join("::"),
@@ -417,6 +393,28 @@ mod tests {
 
     let invocations =
       InvocationParser::parse_invocations(&compilation.justfile, &["foo", "bar"]).unwrap();
+
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].recipe.recipe_path().to_string(), "foo::bar");
+    assert!(invocations[0].arguments.is_empty());
+  }
+
+  #[test]
+  fn module_alias() {
+    let tempdir = tempfile::tempdir().unwrap();
+    tempdir.write("justfile", "mod foo\nalias f := foo");
+    tempdir.write("foo.just", "bar:");
+
+    let loader = Loader::new();
+    let compilation = Compiler::compile(
+      &Config::new().unwrap(),
+      &loader,
+      &tempdir.path().join("justfile"),
+    )
+    .unwrap();
+
+    let invocations =
+      InvocationParser::parse_invocations(&compilation.justfile, &["f", "bar"]).unwrap();
 
     assert_eq!(invocations.len(), 1);
     assert_eq!(invocations[0].recipe.recipe_path().to_string(), "foo::bar");
@@ -618,6 +616,26 @@ foo bar:
     assert_eq!(invocations.len(), 1);
     assert_eq!(invocations[0].recipe.recipe_path().to_string(), "foo");
     assert_eq!(invocations[0].arguments, vec![Value::from("baz")]);
+  }
+
+  #[test]
+  fn repeatable_long_option() {
+    let justfile = testing::compile(
+      "
+[arg('bar', long='bar')]
+foo +bar:
+      ",
+    );
+
+    let invocations =
+      InvocationParser::parse_invocations(&justfile, &["foo", "--bar", "a", "--bar", "b"]).unwrap();
+
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].recipe.recipe_path().to_string(), "foo");
+    assert_eq!(
+      invocations[0].arguments,
+      vec![["a", "b"].into_iter().map(String::from).collect::<Value>()]
+    );
   }
 
   #[test]

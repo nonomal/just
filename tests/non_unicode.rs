@@ -12,9 +12,7 @@ fn warn_for_non_unicode_invocation_directory() {
   fs::write(dir.join("justfile"), "default:\n\ttrue\n").unwrap();
 
   Test::with_tempdir(tempdir)
-    .no_justfile()
     .current_dir(non_unicode_dir_name())
-    .test_round_trip(false)
     .stderr_regex(
       ".*The invocation directory path `[^`]+` is not Unicode\\. Just is considering phasing-out \
       support for non-Unicode paths\\. If you see this warning, please leave a comment on \
@@ -31,9 +29,7 @@ fn warn_for_non_unicode_justfile_path() {
   fs::write(dir.join("justfile"), "default:\n\ttrue\n").unwrap();
 
   Test::with_tempdir(tempdir)
-    .no_justfile()
     .current_dir(non_unicode_dir_name())
-    .test_round_trip(false)
     .stderr_regex(
       ".*The justfile path `[^`]+` is not Unicode\\. Just is considering phasing-out support for \
       non-Unicode paths\\. If you see this warning, please leave a comment on \

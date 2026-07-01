@@ -74,6 +74,7 @@ setting       : 'allow-duplicate-recipes' boolean?
               | 'allow-duplicate-variables' boolean?
               | 'default-list' boolean?
               | 'default-script' boolean?
+              | 'dotenv-command' ':=' string
               | 'dotenv-filename' ':=' string
               | 'dotenv-load' boolean?
               | 'dotenv-override' boolean?
@@ -85,6 +86,7 @@ setting       : 'allow-duplicate-recipes' boolean?
               | 'ignore-comments' boolean?
               | 'lazy' boolean?
               | 'lists' boolean?
+              | 'minimum-version' ':=' string
               | 'no-cd' boolean?
               | 'no-exit-message' boolean?
               | 'positional-arguments' boolean?
@@ -120,8 +122,9 @@ comparison    : conjunct '==' conjunct
 conjunct      : 'if' expression '{' expression '}' ('else' '{' expression '}')?
               | 'assert' '(' expression ',' expression ')'
               | '/' expression
-              | value '/' expression
               | value '+' expression
+              | value '++' expression
+              | value '/' expression
               | value
 
 value         : '!' value

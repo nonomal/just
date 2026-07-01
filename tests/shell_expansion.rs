@@ -24,7 +24,7 @@ fn shell_expanded_strings_must_not_have_whitespace() {
     )
     .stderr(
       "
-        error: expected '&&', '!=', '!~', '||', comment, end of file, end of line, '==', '=~', '(', '+', or '/', but found string
+        error: expected '&&', '!=', '!~', '||', comment, end of file, end of line, '==', '=~', '(', '+', '++', or '/', but found string
          ——▶ justfile:1:8
           │
         1 │ x := x '$JUST_TEST_VARIABLE'
@@ -97,7 +97,13 @@ fn shell_expanded_strings_can_be_used_in_import_paths() {
         foo: bar
       ",
     )
-    .write("import.just", "@bar:\n echo BAR")
+    .write(
+      "import.just",
+      "
+        @bar:
+         echo BAR
+      ",
+    )
     .env("JUST_TEST_VARIABLE", "import.just")
     .stdout("BAR\n")
     .success();
@@ -111,7 +117,13 @@ fn shell_expanded_strings_can_be_used_in_mod_paths() {
         mod foo x'$JUST_TEST_VARIABLE'
       ",
     )
-    .write("mod.just", "@bar:\n echo BAR")
+    .write(
+      "mod.just",
+      "
+        @bar:
+         echo BAR
+      ",
+    )
     .env("JUST_TEST_VARIABLE", "mod.just")
     .args(["foo", "bar"])
     .stdout("BAR\n")

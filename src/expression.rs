@@ -31,6 +31,7 @@ pub(crate) enum Expression<'src> {
     lhs: Box<Self>,
     operator: ConditionalOperator,
     rhs: Box<Self>,
+    token: Token<'src>,
   },
   /// `lhs + rhs`
   Concatenation {
@@ -61,6 +62,12 @@ pub(crate) enum Expression<'src> {
   List {
     elements: Vec<Expression<'src>>,
     open: Token<'src>,
+  },
+  /// `lhs ++ rhs`
+  ListConcatenation {
+    lhs: Box<Self>,
+    operator: Token<'src>,
+    rhs: Box<Self>,
   },
   /// `!operand`
   Not { operand: Box<Self> },
@@ -102,8 +109,11 @@ impl Display for Expression<'_> {
         }
         write!(f, ")")
       }
-      Self::Comparison { lhs, operator, rhs } => write!(f, "{lhs} {operator} {rhs}"),
+      Self::Comparison {
+        lhs, operator, rhs, ..
+      } => write!(f, "{lhs} {operator} {rhs}"),
       Self::Concatenation { lhs, rhs, .. } => write!(f, "{lhs} + {rhs}"),
+      Self::ListConcatenation { lhs, rhs, .. } => write!(f, "{lhs} ++ {rhs}"),
       Self::Conditional {
         condition,
         then,
@@ -190,7 +200,9 @@ impl Serialize for Expression<'_> {
         }
         seq.end()
       }
-      Self::Comparison { lhs, operator, rhs } => {
+      Self::Comparison {
+        lhs, operator, rhs, ..
+      } => {
         let mut seq = serializer.serialize_seq(None)?;
         seq.serialize_element(&operator.to_string())?;
         seq.serialize_element(lhs)?;
@@ -200,6 +212,13 @@ impl Serialize for Expression<'_> {
       Self::Concatenation { lhs, rhs, .. } => {
         let mut seq = serializer.serialize_seq(None)?;
         seq.serialize_element("concatenate")?;
+        seq.serialize_element(lhs)?;
+        seq.serialize_element(rhs)?;
+        seq.end()
+      }
+      Self::ListConcatenation { lhs, rhs, .. } => {
+        let mut seq = serializer.serialize_seq(None)?;
+        seq.serialize_element("list-concatenate")?;
         seq.serialize_element(lhs)?;
         seq.serialize_element(rhs)?;
         seq.end()

@@ -37,6 +37,7 @@ pub(crate) enum TokenKind {
   ParenL,
   ParenR,
   Plus,
+  PlusPlus,
   QuestionMark,
   Slash,
   StringToken,
@@ -51,7 +52,7 @@ impl Display for TokenKind {
     write!(
       f,
       "{}",
-      match *self {
+      match self {
         AmpersandAmpersand => "'&&'",
         Asterisk => "'*'",
         At => "'@'",
@@ -85,6 +86,7 @@ impl Display for TokenKind {
         ParenL => "'('",
         ParenR => "')'",
         Plus => "'+'",
+        PlusPlus => "'++'",
         QuestionMark => "?",
         Slash => "'/'",
         StringToken => "string",

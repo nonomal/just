@@ -3,7 +3,7 @@ use super::*;
 #[derive(Debug, PartialEq)]
 pub(crate) enum CompileErrorKind<'src> {
   ArgAttributeRequiresOption {
-    keyword: &'static str,
+    key: &'src str,
   },
   ArgumentPatternRegex {
     source: regex::Error,
@@ -20,6 +20,9 @@ pub(crate) enum CompileErrorKind<'src> {
   AttributeKeyMissingValue {
     key: Name<'src>,
   },
+  AttributeKeyTakesNoValue {
+    key: &'src str,
+  },
   AttributePositionalFollowsKeyword,
   BacktickShebang,
   CircularRecipeDependency {
@@ -30,6 +33,7 @@ pub(crate) enum CompileErrorKind<'src> {
     variable: &'src str,
     circle: Vec<&'src str>,
   },
+  ConstEval(ConstEvalError<'src>),
   DependencyArgumentCountMismatch {
     dependency: Namepath<'src>,
     found: usize,
@@ -43,6 +47,10 @@ pub(crate) enum CompileErrorKind<'src> {
   DuplicateAttribute {
     attribute: &'src str,
     first: usize,
+  },
+  DuplicateAttributeKey {
+    attribute: &'src str,
+    key: &'src str,
   },
   DuplicateDefault {
     recipe: &'src str,
@@ -95,6 +103,11 @@ pub(crate) enum CompileErrorKind<'src> {
   },
   GuardAndInfallibleSigil,
   Include,
+  IncompatibleSettings {
+    first: Keyword,
+    first_line: usize,
+    second: Keyword,
+  },
   InconsistentLeadingWhitespace {
     expected: &'src str,
     found: &'src str,
@@ -103,17 +116,33 @@ pub(crate) enum CompileErrorKind<'src> {
     message: String,
   },
   InvalidAttribute {
-    item_kind: &'static str,
+    item_kind: ItemKind,
     item_name: &'src str,
     attribute: Box<Attribute<'src>>,
   },
   InvalidEscapeSequence {
     character: char,
   },
+  InvalidMinimumVersion {
+    source: &'static str,
+    version: String,
+  },
+  InvalidShellRecipeAttribute {
+    attribute: Box<Attribute<'src>>,
+    recipe: &'src str,
+  },
+  InvalidSignal {
+    signal: String,
+  },
   ListFeature(ListFeature),
   MappedDependencyMultipleStarredArguments,
   MappedDependencyWithoutListsSetting,
   MappedDependencyWithoutStarredArgument,
+  MinimumVersion {
+    current: Version,
+    minimum: Version,
+  },
+  MinimumVersionExpression,
   MismatchedClosingDelimiter {
     close: Delimiter,
     open: Delimiter,
@@ -124,11 +153,6 @@ pub(crate) enum CompileErrorKind<'src> {
   },
   NoCdAndWorkingDirectoryAttribute {
     recipe: &'src str,
-  },
-  NoCdAndWorkingDirectorySetting {
-    first: Keyword,
-    first_line: usize,
-    second: Keyword,
   },
   OptionNameContainsEqualSign {
     parameter: String,
@@ -142,9 +166,9 @@ pub(crate) enum CompileErrorKind<'src> {
   ParsingRecursionDepthExceeded,
   Redefinition {
     first: usize,
-    first_type: &'static str,
+    first_type: ItemKind,
     name: &'src str,
-    second_type: &'static str,
+    second_type: ItemKind,
   },
   RequiredParameterFollowsDefaultParameter {
     parameter: &'src str,
@@ -202,9 +226,9 @@ pub(crate) enum CompileErrorKind<'src> {
   UnknownAttribute {
     attribute: &'src str,
   },
-  UnknownAttributeKeyword {
+  UnknownAttributeKey {
     attribute: &'src str,
-    keyword: &'src str,
+    key: &'src str,
   },
   UnknownDependency {
     recipe: &'src str,
@@ -220,5 +244,4 @@ pub(crate) enum CompileErrorKind<'src> {
   UnterminatedBacktick,
   UnterminatedInterpolation,
   UnterminatedString,
-  VariadicParameterWithOption,
 }

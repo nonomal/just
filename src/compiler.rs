@@ -27,6 +27,10 @@ impl Compiler {
       paths.insert(current.path.clone(), relative.into());
 
       for item in &mut ast.items {
+        if !item.is_enabled() {
+          continue;
+        }
+
         match item {
           Item::Module {
             absolute,
@@ -61,6 +65,7 @@ impl Compiler {
             relative,
             absolute,
             optional,
+            ..
           } => {
             let import = current
               .path
@@ -105,6 +110,23 @@ impl Compiler {
       false,
       root,
     )?;
+
+    let unknown_overrides = config
+      .overrides
+      .iter()
+      .filter(|((path, name), _value)| {
+        !justfile
+          .submodule(path)
+          .is_some_and(|module| module.assignments.contains_key(name))
+      })
+      .map(|((path, name), _value)| path.join(name).to_string())
+      .collect::<Vec<String>>();
+
+    if !unknown_overrides.is_empty() {
+      return Err(Error::UnknownOverrides {
+        overrides: unknown_overrides,
+      });
+    }
 
     Ok(Compilation {
       asts,
@@ -221,7 +243,7 @@ impl Compiler {
   }
 
   #[cfg(test)]
-  pub(crate) fn test_compile(src: &str) -> RunResult<Justfile> {
+  pub(crate) fn test_compile(src: &str) -> CompileResult<Justfile> {
     let tokens = Lexer::test_lex(src)?;
     let ast = Parser::parse_tokens(&mut Numerator::new(), &tokens)?;
     let root = PathBuf::from("justfile");
@@ -246,16 +268,14 @@ impl Compiler {
 
 #[cfg(test)]
 mod tests {
-  use {super::*, temptree::temptree};
+  use super::*;
 
   #[test]
   fn recursive_includes_fail() {
-    let tmp = temptree! {
-      justfile: "import './subdir/b'\na: b",
-      subdir: {
-        b: "import '../justfile'\nb:"
-      }
-    };
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("justfile"), "import './subdir/b'\na: b").unwrap();
+    fs::create_dir_all(tmp.path().join("subdir")).unwrap();
+    fs::write(tmp.path().join("subdir/b"), "import '../justfile'\nb:").unwrap();
 
     let loader = Loader::new();
 

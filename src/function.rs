@@ -17,6 +17,7 @@ pub(crate) enum Function {
   UnaryToValue(fn(Context, &str) -> ValueResult),
   Binary(fn(Context, &str, &str) -> StringResult),
   BinaryOptToValue(fn(Context, &str, Option<&str>) -> ValueResult),
+  BinaryOptValueStr(fn(Context, &Value, Option<&str>) -> StringResult),
   BinaryOptValueStrToValue(fn(Context, &Value, Option<&str>) -> ValueResult),
   BinaryPlus(fn(Context, &str, &str, &[String]) -> StringResult),
   BinaryStrValue(fn(Context, &str, &Value) -> ValueResult),
@@ -30,10 +31,13 @@ pub(crate) enum Function {
 
 impl Function {
   pub(crate) fn expected_arguments(&self) -> RangeInclusive<usize> {
-    match *self {
+    match self {
       Nullary(_) | ValueNullary(_) => 0..=0,
       Unary(_) | ValueUnary(_) | UnaryMap(_) | UnaryToValue(_) => 1..=1,
-      ValueBinaryOpt(_) | BinaryOptToValue(_) | BinaryOptValueStrToValue(_) => 1..=2,
+      ValueBinaryOpt(_)
+      | BinaryOptToValue(_)
+      | BinaryOptValueStrToValue(_)
+      | BinaryOptValueStr(_) => 1..=2,
       UnaryPlus(_) => 1..=usize::MAX,
       Binary(_) | BinaryStrValue(_) | ValueBinary(_) | BinaryToValue(_) => 2..=2,
       BinaryPlus(_) => 2..=usize::MAX,
@@ -94,6 +98,7 @@ pub(crate) fn get(name: &str) -> Option<Function> {
     "join_list" => BinaryOptValueStrToValue(join_list),
     "just_executable" => Nullary(just_executable),
     "just_pid" => Nullary(just_pid),
+    "just_version" => Nullary(just_version),
     "justfile" => Nullary(justfile),
     "justfile_directory" => Nullary(justfile_directory),
     "kebabcase" => Unary(kebabcase),
@@ -126,7 +131,7 @@ pub(crate) fn get(name: &str) -> Option<Function> {
     "source_directory" => Nullary(source_directory),
     "source_file" => Nullary(source_file),
     "split" => BinaryOptToValue(split),
-    "style" => Unary(style),
+    "style" => BinaryOptValueStr(style),
     "titlecase" => Unary(titlecase),
     "trim" => Unary(trim),
     "trim_end" => Unary(trim_end),
@@ -323,7 +328,7 @@ fn encode_uri_component(_context: Context, s: &str) -> StringResult {
 }
 
 fn env(context: Context, keys: &Value, default: Option<&Value>) -> ValueResult {
-  for key in keys.elements() {
+  for key in keys {
     if let Some(value) = context.execution_context.dotenv.get(key) {
       return Ok(value.into());
     }
@@ -333,7 +338,7 @@ fn env(context: Context, keys: &Value, default: Option<&Value>) -> ValueResult {
       Err(VarError::NotPresent) => {}
       Err(VarError::NotUnicode(value)) => {
         return Err(format!(
-          "environment variable `{key}` not unicode: `{}`",
+          "environment variable `{key}` is not unicode: `{}`",
           value.to_string_lossy(),
         ));
       }
@@ -406,7 +411,7 @@ fn invocation_directory_native(context: Context) -> StringResult {
     .map(str::to_owned)
     .ok_or_else(|| {
       format!(
-        "Invocation directory is not valid unicode: {}",
+        "invocation directory is not valid unicode: {}",
         context
           .execution_context
           .config
@@ -464,6 +469,10 @@ fn just_pid(_context: Context) -> StringResult {
   Ok(std::process::id().to_string())
 }
 
+fn just_version(_context: Context) -> StringResult {
+  Ok(VERSION.into())
+}
+
 fn justfile(context: Context) -> StringResult {
   context
     .execution_context
@@ -473,7 +482,7 @@ fn justfile(context: Context) -> StringResult {
     .map(str::to_owned)
     .ok_or_else(|| {
       format!(
-        "Justfile path is not valid unicode: {}",
+        "justfile path is not valid unicode: {}",
         context.execution_context.search.justfile.display()
       )
     })
@@ -497,7 +506,7 @@ fn justfile_directory(context: Context) -> StringResult {
     .map(str::to_owned)
     .ok_or_else(|| {
       format!(
-        "Justfile directory is not valid unicode: {}",
+        "justfile directory is not valid unicode: {}",
         justfile_directory.display()
       )
     })
@@ -519,7 +528,7 @@ fn module_directory(context: Context) -> StringResult {
   let module_directory = context.execution_context.module.source.parent().unwrap();
   module_directory.to_str().map(str::to_owned).ok_or_else(|| {
     format!(
-      "Module directory is not valid unicode: {}",
+      "module directory is not valid unicode: {}",
       module_directory.display(),
     )
   })
@@ -529,7 +538,7 @@ fn module_file(context: Context) -> StringResult {
   let module_file = &context.execution_context.module.source;
   module_file.to_str().map(str::to_owned).ok_or_else(|| {
     format!(
-      "Module file path is not valid unicode: {}",
+      "module file path is not valid unicode: {}",
       module_file.display(),
     )
   })
@@ -610,23 +619,19 @@ fn replace_regex(_context: Context, s: &str, regex: &str, replacement: &str) -> 
 }
 
 fn sha256(_context: Context, s: &str) -> StringResult {
-  use sha2::{Digest, Sha256};
   let mut hasher = Sha256::new();
   hasher.update(s);
-  let hash = hasher.finalize();
-  Ok(format!("{hash:x}"))
+  Ok(hex::encode(hasher.finalize()))
 }
 
 fn sha256_file(context: Context, path: &str) -> StringResult {
-  use sha2::{Digest, Sha256};
   let path = context.execution_context.working_directory().join(path);
-  let mut hasher = Sha256::new();
   let mut file =
-    fs::File::open(&path).map_err(|err| format!("failed to open `{}`: {err}", path.display()))?;
-  std::io::copy(&mut file, &mut hasher)
+    File::open(&path).map_err(|err| format!("failed to open `{}`: {err}", path.display()))?;
+  let mut writer = HashWriter::<Sha256, Sink>::new(io::sink());
+  io::copy(&mut file, &mut writer)
     .map_err(|err| format!("failed to read `{}`: {err}", path.display()))?;
-  let hash = hasher.finalize();
-  Ok(format!("{hash:x}"))
+  Ok(hex::encode(writer.finalize()))
 }
 
 fn shell(context: Context, command: &str, args: &[String]) -> StringResult {
@@ -670,7 +675,7 @@ fn source_directory(context: Context) -> StringResult {
     .map(str::to_owned)
     .ok_or_else(|| {
       format!(
-        "source file path not valid unicode: {}",
+        "source file path is not valid unicode: {}",
         context.name.token.path.display(),
       )
     })
@@ -688,7 +693,7 @@ fn source_file(context: Context) -> StringResult {
     .map(str::to_owned)
     .ok_or_else(|| {
       format!(
-        "source file path not valid unicode: {}",
+        "source file path is not valid unicode: {}",
         context.name.token.path.display(),
       )
     })
@@ -702,18 +707,111 @@ fn split(_context: Context, s: &str, separator: Option<&str>) -> ValueResult {
   })
 }
 
-fn style(context: Context, s: &str) -> StringResult {
-  match s {
-    "command" => Ok(
-      Color::always()
-        .command(context.execution_context.config.command_color)
-        .prefix()
-        .to_string(),
-    ),
-    "error" => Ok(Color::always().error().prefix().to_string()),
-    "warning" => Ok(Color::always().warning().prefix().to_string()),
-    _ => Err(format!("unknown style: `{s}`")),
+fn style(context: Context, styles: &Value, text: Option<&str>) -> StringResult {
+  use nu_ansi_term::Color::*;
+
+  static FIXED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^(fg:|bg:)?(0|[1-9][0-9]{0,2})$").unwrap());
+
+  static RGB_LONG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^(fg:|bg:)?#([[:xdigit:]]{6})$").unwrap());
+
+  static RGB_SHORT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^(fg:|bg:)?#([[:xdigit:]]{3})$").unwrap());
+
+  fn layer(captures: regex::Captures) -> Layer {
+    match captures.get(1).map(|capture| capture.as_str()) {
+      Some("bg:") => Layer::Background,
+      Some("fg:") | None => Layer::Foreground,
+      _ => unreachable!(),
+    }
   }
+
+  let config = context.execution_context.config;
+
+  let mut style = Style::new();
+  let mut active = true;
+
+  for token in styles {
+    let error = || format!("invalid style: `{token}`");
+
+    if let Some(captures) = FIXED.captures(token) {
+      let Ok(color) = captures[2].parse::<u8>() else {
+        return Err(error());
+      };
+      style.color(Fixed(color), layer(captures));
+    } else if let Some(captures) = RGB_LONG.captures(token) {
+      let [_, r, g, b] = u32::from_str_radix(&captures[2], 16).unwrap().to_be_bytes();
+      style.color(Rgb(r, g, b), layer(captures));
+    } else if let Some(captures) = RGB_SHORT.captures(token) {
+      let n = u16::from_str_radix(&captures[2], 16).unwrap();
+      let r = u8::try_from((n >> 8) & 0xf).unwrap() * 0x11;
+      let g = u8::try_from((n >> 4) & 0xf).unwrap() * 0x11;
+      let b = u8::try_from(n & 0xf).unwrap() * 0x11;
+      style.color(Rgb(r, g, b), layer(captures));
+    } else {
+      match token.as_str() {
+        // foreground
+        "fg:black" | "black" => style.fg(Black),
+        "fg:blue" | "blue" => style.fg(Blue),
+        "fg:cyan" | "cyan" => style.fg(Cyan),
+        "fg:green" | "green" => style.fg(Green),
+        "fg:magenta" | "magenta" => style.fg(Magenta),
+        "fg:red" | "red" => style.fg(Red),
+        "fg:white" | "white" => style.fg(White),
+        "fg:yellow" | "yellow" => style.fg(Yellow),
+        // background
+        "bg:black" => style.bg(Black),
+        "bg:blue" => style.bg(Blue),
+        "bg:cyan" => style.bg(Cyan),
+        "bg:green" => style.bg(Green),
+        "bg:magenta" => style.bg(Magenta),
+        "bg:red" => style.bg(Red),
+        "bg:white" => style.bg(White),
+        "bg:yellow" => style.bg(Yellow),
+        // properties
+        "blink" => style.blink(),
+        "bold" => style.bold(),
+        "dim" => style.dim(),
+        "hidden" => style.hidden(),
+        "italic" => style.italic(),
+        "reverse" => style.reverse(),
+        "strikethrough" => style.strikethrough(),
+        "underline" => style.underline(),
+        // streams
+        "stdout" => active = config.color.stdout().active(),
+        "stderr" => active = config.color.stderr().active(),
+        // roles
+        "command" => {
+          if let Some(color) = config.command_color {
+            style.fg(color);
+          }
+          style.bold();
+        }
+        "error" => {
+          style.fg(Red);
+          style.bold();
+        }
+        "warning" => {
+          style.fg(Yellow);
+          style.bold();
+        }
+        _ => return Err(error()),
+      }
+    }
+  }
+
+  Ok(if active {
+    match text {
+      Some(text) => style.paint(text),
+      None => style.prefix(),
+    }
+  } else {
+    match text {
+      Some(text) => text.into(),
+      None => String::new(),
+    }
+  })
 }
 
 fn titlecase(_context: Context, s: &str) -> StringResult {

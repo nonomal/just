@@ -60,7 +60,7 @@ struct Parameter<'a> {
   kind: &'a str,
   long: Option<&'a str>,
   name: &'a str,
-  pattern: Option<&'a str>,
+  pattern: Option<Vec<&'a str>>,
   short: Option<char>,
   value: Option<&'a str>,
 }
@@ -95,6 +95,7 @@ struct Settings<'a> {
   allow_duplicate_variables: bool,
   default_list: bool,
   default_script: bool,
+  dotenv_command: Vec<String>,
   dotenv_filename: Option<Dotenv<'a>>,
   dotenv_load: bool,
   dotenv_override: bool,
@@ -752,7 +753,7 @@ fn dotenv_filename_list() {
         foo:
       ",
     )
-    .env("JUST_UNSTABLE", "1")
+    .unstable()
     .args(["--dump", "--dump-format", "json"])
     .stdout_regex(".*");
 
@@ -769,6 +770,84 @@ fn dotenv_filename_list() {
     .into(),
     settings: Settings {
       dotenv_filename: Some(Dotenv::Many(vec!["foo", "bar"])),
+      lists: true,
+      ..default()
+    },
+    ..default()
+  };
+
+  fix_source(test.tempdir.path(), &mut expected);
+
+  let stdout = test.success().stdout;
+  let actual = serde_json::from_str::<Module>(&stdout).unwrap();
+
+  pretty_assertions::assert_eq!(actual, expected);
+}
+
+#[test]
+fn dotenv_command() {
+  let test = Test::new()
+    .justfile(
+      "
+        set dotenv-command := 'echo FOO=bar'
+
+        foo:
+      ",
+    )
+    .args(["--dump", "--dump-format", "json"])
+    .stdout_regex(".*");
+
+  let mut expected = Module {
+    first: Some("foo"),
+    recipes: [(
+      "foo",
+      Recipe {
+        name: "foo",
+        namepath: "foo",
+        ..default()
+      },
+    )]
+    .into(),
+    settings: Settings {
+      dotenv_command: vec!["echo FOO=bar".into()],
+      ..default()
+    },
+    ..default()
+  };
+
+  fix_source(test.tempdir.path(), &mut expected);
+
+  let stdout = test.success().stdout;
+  let actual = serde_json::from_str::<Module>(&stdout).unwrap();
+
+  pretty_assertions::assert_eq!(actual, expected);
+}
+
+#[test]
+fn list_concatenation() {
+  let test = Test::new()
+    .justfile(
+      "
+        set lists
+
+        foo := ['bar'] ++ ['baz']
+      ",
+    )
+    .unstable()
+    .args(["--dump", "--dump-format", "json"])
+    .stdout_regex(".*");
+
+  let mut expected = Module {
+    assignments: [(
+      "foo",
+      Assignment {
+        name: "foo",
+        value: json!(["list-concatenate", ["list", "bar"], ["list", "baz"]]),
+        ..default()
+      },
+    )]
+    .into(),
+    settings: Settings {
       lists: true,
       ..default()
     },
@@ -841,6 +920,54 @@ fn attribute() {
         "foo",
         Recipe {
           attributes: [json!("no-exit-message")].into(),
+          name: "foo",
+          namepath: "foo",
+          ..default()
+        },
+      )]
+      .into(),
+      ..default()
+    },
+  );
+}
+
+#[test]
+fn continue_attribute_default() {
+  case(
+    "
+      [continue]
+      foo:
+    ",
+    Module {
+      first: Some("foo"),
+      recipes: [(
+        "foo",
+        Recipe {
+          attributes: [json!({"continue": []})].into(),
+          name: "foo",
+          namepath: "foo",
+          ..default()
+        },
+      )]
+      .into(),
+      ..default()
+    },
+  );
+}
+
+#[test]
+fn continue_attribute_signals() {
+  case(
+    "
+      [continue('SIGINT', 'SIGHUP')]
+      foo:
+    ",
+    Module {
+      first: Some("foo"),
+      recipes: [(
+        "foo",
+        Recipe {
+          attributes: [json!({"continue": ["SIGHUP", "SIGINT"]})].into(),
           name: "foo",
           namepath: "foo",
           ..default()
@@ -947,6 +1074,40 @@ fn module() {
         "foo",
         Module {
           doc: Some("hello"),
+          first: Some("bar"),
+          module_path: "foo",
+          source: "foo.just".into(),
+          recipes: [(
+            "bar",
+            Recipe {
+              name: "bar",
+              namepath: "foo::bar",
+              ..default()
+            },
+          )]
+          .into(),
+          ..default()
+        },
+      )]
+      .into(),
+      ..default()
+    },
+  );
+}
+
+#[test]
+fn module_doc_attribute_empty_string() {
+  case_with_submodule(
+    "
+      [doc('')]
+      mod foo
+    ",
+    Some(("foo.just", "bar:")),
+    Module {
+      modules: [(
+        "foo",
+        Module {
+          doc: Some(""),
           first: Some("bar"),
           module_path: "foo",
           source: "foo.just".into(),
@@ -1131,7 +1292,7 @@ fn arg_pattern() {
               "help": null,
               "long": null,
               "name": "bar",
-              "pattern": "BAR",
+              "pattern": ["BAR"],
               "short": null,
               "value": null,
             }
@@ -1140,7 +1301,7 @@ fn arg_pattern() {
           parameters: [Parameter {
             kind: "singular",
             name: "bar",
-            pattern: Some("BAR"),
+            pattern: Some(vec!["BAR"]),
             ..default()
           }]
           .into(),
@@ -1295,7 +1456,6 @@ fn arg_flag() {
             kind: "singular",
             long: Some("bar"),
             name: "bar",
-            value: Some("true"),
             ..default()
           }]
           .into(),

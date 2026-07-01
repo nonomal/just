@@ -31,10 +31,10 @@ impl Display for CompileError<'_> {
     use CompileErrorKind::*;
 
     match &*self.kind {
-      ArgAttributeRequiresOption { keyword } => {
+      ArgAttributeRequiresOption { key } => {
         write!(
           f,
-          "argument attribute `{keyword}` only valid with `long` or `short`"
+          "argument attribute `{key}` only valid with `long` or `short`"
         )
       }
       ArgumentPatternRegex { .. } => {
@@ -66,6 +66,9 @@ impl Display for CompileError<'_> {
           "attribute `{attribute}` arguments must be string literals"
         )
       }
+      AttributeKeyTakesNoValue { key } => {
+        write!(f, "attribute key `{key}` takes no value")
+      }
       AttributePositionalFollowsKeyword => {
         write!(
           f,
@@ -95,6 +98,7 @@ impl Display for CompileError<'_> {
           )
         }
       }
+      ConstEval(error) => write!(f, "{error}"),
       DependencyArgumentCountMismatch {
         dependency,
         found,
@@ -127,6 +131,9 @@ impl Display for CompileError<'_> {
         first.ordinal(),
         self.token.line.ordinal(),
       ),
+      DuplicateAttributeKey { attribute, key } => {
+        write!(f, "duplicate key `{key}` for `{attribute}` attribute")
+      }
       DuplicateDefault { recipe } => write!(
         f,
         "recipe `{recipe}` has duplicate `[default]` attribute, which may only appear once per module",
@@ -208,6 +215,17 @@ impl Display for CompileError<'_> {
         f,
         "the `!include` directive has been stabilized as `import`"
       ),
+      IncompatibleSettings {
+        first,
+        first_line,
+        second,
+      } => write!(
+        f,
+        "`{}` set on line {} is incompatible with `{}`",
+        first.lexeme(),
+        first_line.ordinal(),
+        second.lexeme()
+      ),
       InconsistentLeadingWhitespace { expected, found } => write!(
         f,
         "recipe line has inconsistent leading whitespace, started with `{}` but found line with \
@@ -240,6 +258,21 @@ impl Display for CompileError<'_> {
           _ => character.escape_default().collect(),
         }
       ),
+      InvalidShellRecipeAttribute { attribute, recipe } => write!(
+        f,
+        "shell recipe `{recipe}` has script recipe attribute `{}`",
+        attribute.name(),
+      ),
+      InvalidMinimumVersion { source, version } => {
+        write!(
+          f,
+          "`minimum-version` setting has invalid version `{version}`: {source}"
+        )
+      }
+      InvalidSignal { signal } => write!(
+        f,
+        "invalid signal `{signal}`: expected `SIGHUP`, `SIGINT`, or `SIGQUIT`"
+      ),
       ListFeature(feature) => write!(f, "{feature}"),
       MappedDependencyMultipleStarredArguments => {
         write!(
@@ -252,6 +285,16 @@ impl Display for CompileError<'_> {
       }
       MappedDependencyWithoutStarredArgument => {
         write!(f, "mapped dependencies must have starred argument")
+      }
+      MinimumVersion { current, minimum } => write!(
+        f,
+        "justfile requires just {minimum} or later, but using {current}",
+      ),
+      MinimumVersionExpression => {
+        write!(
+          f,
+          "`minimum-version` setting must be a plain string literal"
+        )
       }
       MismatchedClosingDelimiter {
         open,
@@ -273,17 +316,6 @@ impl Display for CompileError<'_> {
       NoCdAndWorkingDirectoryAttribute { recipe } => write!(
         f,
         "recipe `{recipe}` has both `[no-cd]` and `[working-directory]` attributes"
-      ),
-      NoCdAndWorkingDirectorySetting {
-        first,
-        first_line,
-        second,
-      } => write!(
-        f,
-        "`{}` set on line {} is incompatible with `{}`",
-        first.lexeme(),
-        first_line.ordinal(),
-        second.lexeme()
       ),
       OptionNameContainsEqualSign { parameter } => {
         write!(
@@ -316,7 +348,7 @@ impl Display for CompileError<'_> {
             f,
             "{first_type} `{name}` defined on line {} is redefined as {} {second_type} on line {}",
             first.ordinal(),
-            if *second_type == "alias" { "an" } else { "a" },
+            second_type.article(),
             self.token.line.ordinal(),
           )
         }
@@ -386,8 +418,8 @@ impl Display for CompileError<'_> {
       AttributeKeyMissingValue { key } => {
         write!(f, "attribute key `{key}` requires value")
       }
-      UnknownAttributeKeyword { attribute, keyword } => {
-        write!(f, "unknown keyword `{keyword}` for `{attribute}` attribute")
+      UnknownAttributeKey { attribute, key } => {
+        write!(f, "unknown key `{key}` for `{attribute}` attribute")
       }
       UnknownAttribute { attribute } => write!(f, "unknown attribute `{attribute}`"),
       UnknownDependency { recipe, unknown } => {
@@ -405,7 +437,6 @@ impl Display for CompileError<'_> {
       UnterminatedBacktick => write!(f, "unterminated backtick"),
       UnterminatedInterpolation => write!(f, "unterminated interpolation"),
       UnterminatedString => write!(f, "unterminated string"),
-      VariadicParameterWithOption => write!(f, "variadic parameters may not be options"),
     }
   }
 }

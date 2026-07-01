@@ -1,6 +1,7 @@
 use super::*;
 
-#[derive(Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub(crate) struct Value {
   elements: Vec<String>,
 }
@@ -67,6 +68,10 @@ impl Value {
   pub(crate) fn is_truthy(&self) -> bool {
     !self.elements.is_empty()
   }
+
+  pub(crate) fn iter(&self) -> slice::Iter<String> {
+    self.elements.iter()
+  }
 }
 
 impl ColorDisplay for Value {
@@ -76,7 +81,7 @@ impl ColorDisplay for Value {
     } else {
       write!(f, "[")?;
 
-      for (i, element) in self.elements.iter().enumerate() {
+      for (i, element) in self.iter().enumerate() {
         if i > 0 {
           write!(f, ", ")?;
         }
@@ -86,15 +91,6 @@ impl ColorDisplay for Value {
 
       write!(f, "]")
     }
-  }
-}
-
-impl Serialize for Value {
-  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: Serializer,
-  {
-    serializer.serialize_str(&self.join())
   }
 }
 
@@ -144,6 +140,24 @@ impl FromIterator<String> for Value {
   }
 }
 
+impl<'a> IntoIterator for &'a Value {
+  type Item = &'a String;
+  type IntoIter = slice::Iter<'a, String>;
+
+  fn into_iter(self) -> Self::IntoIter {
+    self.elements.iter()
+  }
+}
+
+impl IntoIterator for Value {
+  type Item = String;
+  type IntoIter = vec::IntoIter<String>;
+
+  fn into_iter(self) -> Self::IntoIter {
+    self.elements.into_iter()
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -154,10 +168,6 @@ mod tests {
     fn case(elements: &[&str], expected: &str) {
       let value = elements.iter().map(ToString::to_string).collect::<Value>();
       assert_eq!(value.join(), expected);
-      assert_eq!(
-        serde_json::to_string(&value).unwrap(),
-        format!("{expected:?}")
-      );
     }
 
     case(&[], "");

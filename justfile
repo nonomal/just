@@ -9,18 +9,18 @@ log := "warn"
 export JUST_LOG := log
 
 [group: 'dev']
-watch +args='ltest':
+watch +args='lcheck':
   cargo watch --clear --exec '{{ args }}'
 
 [group: 'test']
-test:
-  cargo ltest --all
+test: (watch 'ltest --tests --all --all-targets')
 
 [group: 'check']
 check: (watch 'lcheck --tests --all --all-targets')
 
 [group: 'check']
-ci: test clippy build-book forbid
+ci: test build-book forbid
+  cargo lclippy --all --all-targets --all-features -- --deny warnings
   cargo fmt --all -- --check
   cargo update --locked --package just
 
@@ -34,8 +34,7 @@ run:
 
 # only run tests matching `PATTERN`
 [group: 'test']
-filter PATTERN:
-  cargo ltest {{PATTERN}}
+filter PATTERN: (watch f'ltest --tests --all --all-targets {{PATTERN}}')
 
 [group: 'misc']
 build:
@@ -70,7 +69,7 @@ update-changelog:
 
 [group: 'release']
 update-contributors:
-  cargo lrun --release --package update-contributors
+  changeling update-contributors
 
 [group: 'check']
 action-versions:
@@ -131,8 +130,7 @@ install-dev-deps:
 
 # everyone's favorite animate paper clip
 [group: 'check']
-clippy:
-  cargo lclippy --all --all-targets --all-features -- --deny warnings
+clippy: (watch 'lclippy --all --all-targets --all-features -- --deny warnings')
 
 [group: 'check']
 forbid:
@@ -245,7 +243,3 @@ test-completions:
 [group: 'demo']
 rule124:
   just -f examples/rule124.just
-
-# Local Variables:
-# mode: makefile
-# End:

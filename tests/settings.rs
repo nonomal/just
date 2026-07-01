@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn invalid_attribute() {
+  Test::new()
+    .justfile(
+      "
+        [doc('bar')]
+        set quiet
+      ",
+    )
+    .stderr(
+      "
+        error: setting `quiet` has invalid attribute `doc`
+         ——▶ justfile:2:5
+          │
+        2 │ set quiet
+          │     ^^^^^
+      ",
+    )
+    .failure();
+}
+
+#[test]
 fn all_settings_allow_expressions() {
   Test::new()
     .justfile(
@@ -81,6 +102,26 @@ fn undefined_variable_in_dotenv_path() {
           │
         1 │ set dotenv-path := foo
           │                    ^^^
+      ",
+    )
+    .failure();
+}
+
+#[test]
+fn undefined_variable_in_dotenv_command() {
+  Test::new()
+    .justfile(
+      "
+        set dotenv-command := foo
+      ",
+    )
+    .stderr(
+      "
+        error: variable `foo` not defined
+         ——▶ justfile:1:23
+          │
+        1 │ set dotenv-command := foo
+          │                       ^^^
       ",
     )
     .failure();
@@ -461,6 +502,10 @@ fn bad_regex() {
             (
             ^
         error: unclosed group
+         ——▶ justfile:1:32
+          │
+        1 │ set working-directory := if '' =~ '(' {
+          │                                ^^
       ",
     )
     .failure();
@@ -479,7 +524,6 @@ fn backtick_override() {
           cat file.txt
       ",
     )
-    .test_round_trip(false)
     .arg("bar=foo")
     .write("foo/file.txt", "baz")
     .arg("foo")

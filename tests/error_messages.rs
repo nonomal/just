@@ -3,10 +3,18 @@ use super::*;
 #[test]
 fn invalid_alias_attribute() {
   Test::new()
-    .justfile("[private]\n[linux]\nalias t := test\n\ntest:\n")
+    .justfile(
+      "
+        [private]
+        [no-cd]
+        alias t := test
+
+        test:
+      ",
+    )
     .stderr(
       "
-        error: alias `t` has invalid attribute `linux`
+        error: alias `t` has invalid attribute `no-cd`
          ——▶ justfile:3:7
           │
         3 │ alias t := test
@@ -88,7 +96,6 @@ fn file_paths_not_in_subdir_are_absolute() {
   Test::new()
     .write("foo/justfile", "import '../bar.just'")
     .write("bar.just", "baz")
-    .no_justfile()
     .args(["--justfile", "foo/justfile"])
     .stderr_regex(
       r"error: expected '\*', ':', '\$', identifier, or '\+', but found end of file

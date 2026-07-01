@@ -6,7 +6,7 @@ use super::*;
 )]
 #[strum(serialize_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
-#[strum_discriminants(name(AttributeDiscriminant))]
+#[strum_discriminants(name(AttributeKind))]
 #[strum_discriminants(derive(EnumString, Ord, PartialOrd))]
 #[strum_discriminants(strum(serialize_all = "kebab-case"))]
 pub(crate) enum Attribute<'src> {
@@ -14,18 +14,32 @@ pub(crate) enum Attribute<'src> {
   Arg {
     #[serde(skip)]
     flag: Option<Token<'src>>,
-    help: Option<StringLiteral<'src>>,
+    help: Option<String>,
+    #[serde(skip)]
+    help_property: Option<(Name<'src>, Expression<'src>)>,
     long: Option<StringLiteral<'src>>,
     #[serde(skip)]
-    long_key: Option<Token<'src>>,
+    long_key: Option<Name<'src>>,
+    #[serde(skip)]
+    multiple: Option<Token<'src>>,
     name: StringLiteral<'src>,
-    pattern: Option<Pattern<'src>>,
+    pattern: Option<Pattern>,
+    #[serde(skip)]
+    pattern_property: Option<(Name<'src>, Expression<'src>)>,
     short: Option<StringLiteral<'src>>,
-    value: Option<StringLiteral<'src>>,
+    #[serde(skip)]
+    short_key: Option<Name<'src>>,
+    value: Option<Expression<'src>>,
+  },
+  Cache {
+    extra: Option<Expression<'src>>,
+    inputs: Option<Expression<'src>>,
+    outputs: Option<Expression<'src>>,
   },
   Confirm(Option<Expression<'src>>),
+  Continue(BTreeSet<Signal>),
   Default,
-  Doc(Option<StringLiteral<'src>>),
+  Doc(Option<Expression<'src>>),
   Dragonfly,
   Env(Expression<'src>, Expression<'src>),
   ExitMessage,
@@ -50,18 +64,37 @@ pub(crate) enum Attribute<'src> {
   WorkingDirectory(Expression<'src>),
 }
 
-impl AttributeDiscriminant {
+impl AttributeKind {
   fn accepts_expressions(self) -> bool {
-    matches!(self, Self::Confirm | Self::Env | Self::WorkingDirectory)
+    matches!(
+      self,
+      Self::Confirm | Self::Doc | Self::Env | Self::WorkingDirectory
+    )
   }
 
   pub(crate) fn accepts_keyword_arguments(self) -> bool {
-    matches!(self, Self::Arg)
+    matches!(self, Self::Arg | Self::Cache)
+  }
+
+  pub(crate) fn is_enabler(self) -> bool {
+    matches!(
+      self,
+      Self::Android
+        | Self::Dragonfly
+        | Self::Freebsd
+        | Self::Linux
+        | Self::Macos
+        | Self::Netbsd
+        | Self::Openbsd
+        | Self::Unix
+        | Self::Windows
+    )
   }
 
   fn argument_range(self) -> RangeInclusive<usize> {
     match self {
       Self::Android
+      | Self::Cache
       | Self::Default
       | Self::Dragonfly
       | Self::ExitMessage
@@ -80,7 +113,7 @@ impl AttributeDiscriminant {
       | Self::Unix
       | Self::Windows => 0..=0,
       Self::Confirm | Self::Doc => 0..=1,
-      Self::Script => 0..=usize::MAX,
+      Self::Continue | Self::Script => 0..=usize::MAX,
       Self::Arg | Self::Extension | Self::Group | Self::WorkingDirectory => 1..=1,
       Self::Env => 2..=2,
       Self::Metadata => 1..=usize::MAX,
@@ -114,12 +147,12 @@ impl<'src> Attribute<'src> {
 
   pub(crate) fn new(
     name: Name<'src>,
-    discriminant: AttributeDiscriminant,
+    kind: AttributeKind,
     arguments: Vec<(Token<'src>, Expression<'src>)>,
-    mut keyword_arguments: BTreeMap<&'src str, (Name<'src>, Option<StringLiteral<'src>>)>,
+    mut keyword_arguments: BTreeMap<&'src str, (Name<'src>, Option<Expression<'src>>)>,
   ) -> CompileResult<'src, Self> {
     let found = arguments.len();
-    let range = discriminant.argument_range();
+    let range = kind.argument_range();
     if !range.contains(&found) {
       return Err(
         name.error(CompileErrorKind::AttributeArgumentCountMismatch {
@@ -131,25 +164,28 @@ impl<'src> Attribute<'src> {
       );
     }
 
-    if discriminant.accepts_expressions() {
-      if let Some((_name, (keyword, _literal))) = keyword_arguments.pop_first() {
-        return Err(keyword.error(CompileErrorKind::UnknownAttributeKeyword {
+    if kind.accepts_expressions() {
+      if let Some((_name, (key, _literal))) = keyword_arguments.pop_first() {
+        return Err(key.error(CompileErrorKind::UnknownAttributeKey {
           attribute: name.lexeme(),
-          keyword: keyword.lexeme(),
+          key: key.lexeme(),
         }));
       }
 
-      return match discriminant {
-        AttributeDiscriminant::Confirm => Ok(Self::Confirm(
+      return match kind {
+        AttributeKind::Confirm => Ok(Self::Confirm(
           arguments.into_iter().next().map(|(_, expr)| expr),
         )),
-        AttributeDiscriminant::Env => {
+        AttributeKind::Doc => Ok(Self::Doc(
+          arguments.into_iter().next().map(|(_, expr)| expr),
+        )),
+        AttributeKind::Env => {
           let mut arguments = arguments.into_iter();
           let (_, key) = arguments.next().unwrap();
           let (_, value) = arguments.next().unwrap();
           Ok(Self::Env(key, value))
         }
-        AttributeDiscriminant::WorkingDirectory => Ok(Self::WorkingDirectory(
+        AttributeKind::WorkingDirectory => Ok(Self::WorkingDirectory(
           arguments.into_iter().next().map(|(_, expr)| expr).unwrap(),
         )),
         _ => unreachable!(),
@@ -168,69 +204,72 @@ impl<'src> Attribute<'src> {
       })
       .collect::<CompileResult<Vec<StringLiteral>>>()?;
 
-    let attribute = match discriminant {
-      AttributeDiscriminant::Arg => {
+    let attribute = match kind {
+      AttributeKind::Arg => {
         let arg = arguments.into_iter().next().unwrap();
 
         let (long, long_key) = keyword_arguments
           .remove("long")
-          .map(|(name, literal)| {
-            if let Some(literal) = literal {
+          .map(|(key, expression)| {
+            if let Some(expression) = expression {
+              let literal = Self::require_string_literal(name, key, expression)?;
               Self::check_option_name(&arg, &literal)?;
               Ok((Some(literal), None))
             } else {
-              Ok((Some(arg.clone()), Some(*name)))
+              Ok((Some(arg.clone()), Some(key)))
             }
           })
           .transpose()?
-          .unwrap_or((None, None));
+          .unwrap_or_default();
 
-        let short = Self::remove_required(&mut keyword_arguments, "short")?
-          .map(|(_key, literal)| {
-            Self::check_option_name(&arg, &literal)?;
+        let (short, short_key) = keyword_arguments
+          .remove("short")
+          .map(|(key, expression)| {
+            if let Some(expression) = expression {
+              let literal = Self::require_string_literal(name, key, expression)?;
 
-            if literal.cooked.chars().count() != 1 {
-              return Err(literal.token.error(
-                CompileErrorKind::ShortOptionWithMultipleCharacters {
-                  parameter: arg.cooked.clone(),
-                },
-              ));
+              Self::check_option_name(&arg, &literal)?;
+
+              if literal.cooked.chars().count() != 1 {
+                return Err(literal.token.error(
+                  CompileErrorKind::ShortOptionWithMultipleCharacters {
+                    parameter: arg.cooked.clone(),
+                  },
+                ));
+              }
+
+              Ok((Some(literal), None))
+            } else {
+              Ok((Some(arg.clone()), Some(key)))
             }
-
-            Ok(literal)
           })
-          .transpose()?;
+          .transpose()?
+          .unwrap_or_default();
 
-        let pattern = Self::remove_required(&mut keyword_arguments, "pattern")?
-          .map(|(_key, literal)| Pattern::new(&literal))
-          .transpose()?;
+        let pattern_property = Self::remove_required(&mut keyword_arguments, "pattern")?;
 
         let value = Self::remove_required(&mut keyword_arguments, "value")?
-          .map(|(key, literal)| {
+          .map(|(key, expression)| {
             if long.is_none() && short.is_none() {
               return Err(
-                key.error(CompileErrorKind::ArgAttributeRequiresOption { keyword: "value" }),
+                key.error(CompileErrorKind::ArgAttributeRequiresOption { key: key.lexeme() }),
               );
             }
-            Ok(literal)
+            Ok(expression)
           })
           .transpose()?;
 
         let flag = keyword_arguments
           .remove("flag")
-          .map(|(key, literal)| {
-            if let Some(literal) = literal {
-              return Err(
-                literal
-                  .token
-                  .error(CompileErrorKind::FlagAttributeTakesNoValue {
-                    parameter: arg.cooked.clone(),
-                  }),
-              );
+          .map(|(key, expression)| {
+            if expression.is_some() {
+              return Err(key.error(CompileErrorKind::FlagAttributeTakesNoValue {
+                parameter: arg.cooked.clone(),
+              }));
             }
             if long.is_none() && short.is_none() {
               return Err(
-                key.error(CompileErrorKind::ArgAttributeRequiresOption { keyword: "flag" }),
+                key.error(CompileErrorKind::ArgAttributeRequiresOption { key: key.lexeme() }),
               );
             }
             if value.is_some() {
@@ -242,81 +281,135 @@ impl<'src> Attribute<'src> {
           })
           .transpose()?;
 
-        let help =
-          Self::remove_required(&mut keyword_arguments, "help")?.map(|(_key, literal)| literal);
+        let multiple = keyword_arguments
+          .remove("multiple")
+          .map(|(key, expression)| {
+            if expression.is_some() {
+              return Err(
+                key.error(CompileErrorKind::AttributeKeyTakesNoValue { key: key.lexeme() }),
+              );
+            }
+            if long.is_none() && short.is_none() {
+              return Err(
+                key.error(CompileErrorKind::ArgAttributeRequiresOption { key: key.lexeme() }),
+              );
+            }
+            Ok(*key)
+          })
+          .transpose()?;
+
+        let help_property = Self::remove_required(&mut keyword_arguments, "help")?;
 
         Self::Arg {
           flag,
-          help,
+          help: None,
+          help_property,
           long,
           long_key,
+          multiple,
           name: arg,
-          pattern,
+          pattern: None,
+          pattern_property,
           short,
+          short_key,
           value,
         }
       }
-      AttributeDiscriminant::Android => Self::Android,
-      AttributeDiscriminant::Confirm
-      | AttributeDiscriminant::Env
-      | AttributeDiscriminant::WorkingDirectory => unreachable!(),
-      AttributeDiscriminant::Default => Self::Default,
-      AttributeDiscriminant::Doc => Self::Doc(arguments.into_iter().next()),
-      AttributeDiscriminant::Dragonfly => Self::Dragonfly,
-      AttributeDiscriminant::ExitMessage => Self::ExitMessage,
-      AttributeDiscriminant::Extension => Self::Extension(arguments.into_iter().next().unwrap()),
-      AttributeDiscriminant::Freebsd => Self::Freebsd,
-      AttributeDiscriminant::Group => Self::Group(arguments.into_iter().next().unwrap()),
-      AttributeDiscriminant::Linux => Self::Linux,
-      AttributeDiscriminant::Macos => Self::Macos,
-      AttributeDiscriminant::Metadata => Self::Metadata(arguments),
-      AttributeDiscriminant::Netbsd => Self::Netbsd,
-      AttributeDiscriminant::NoCd => Self::NoCd,
-      AttributeDiscriminant::NoExitMessage => Self::NoExitMessage,
-      AttributeDiscriminant::NoQuiet => Self::NoQuiet,
-      AttributeDiscriminant::Openbsd => Self::Openbsd,
-      AttributeDiscriminant::Parallel => Self::Parallel,
-      AttributeDiscriminant::PositionalArguments => Self::PositionalArguments,
-      AttributeDiscriminant::Private => Self::Private,
-      AttributeDiscriminant::Script => Self::Script({
+      AttributeKind::Android => Self::Android,
+      AttributeKind::Cache => Self::Cache {
+        extra: Self::remove_required(&mut keyword_arguments, "extra")?
+          .map(|(_key, expression)| expression),
+        inputs: Self::remove_required(&mut keyword_arguments, "inputs")?
+          .map(|(_key, expression)| expression),
+        outputs: Self::remove_required(&mut keyword_arguments, "outputs")?
+          .map(|(_key, expression)| expression),
+      },
+      AttributeKind::Continue => Self::Continue(
+        arguments
+          .into_iter()
+          .map(|literal| {
+            Signal::from_name(&literal.cooked).ok_or_else(|| {
+              literal.token.error(CompileErrorKind::InvalidSignal {
+                signal: literal.cooked.clone(),
+              })
+            })
+          })
+          .collect::<CompileResult<BTreeSet<Signal>>>()?,
+      ),
+      AttributeKind::Confirm
+      | AttributeKind::Doc
+      | AttributeKind::Env
+      | AttributeKind::WorkingDirectory => {
+        unreachable!()
+      }
+      AttributeKind::Default => Self::Default,
+      AttributeKind::Dragonfly => Self::Dragonfly,
+      AttributeKind::ExitMessage => Self::ExitMessage,
+      AttributeKind::Extension => Self::Extension(arguments.into_iter().next().unwrap()),
+      AttributeKind::Freebsd => Self::Freebsd,
+      AttributeKind::Group => Self::Group(arguments.into_iter().next().unwrap()),
+      AttributeKind::Linux => Self::Linux,
+      AttributeKind::Macos => Self::Macos,
+      AttributeKind::Metadata => Self::Metadata(arguments),
+      AttributeKind::Netbsd => Self::Netbsd,
+      AttributeKind::NoCd => Self::NoCd,
+      AttributeKind::NoExitMessage => Self::NoExitMessage,
+      AttributeKind::NoQuiet => Self::NoQuiet,
+      AttributeKind::Openbsd => Self::Openbsd,
+      AttributeKind::Parallel => Self::Parallel,
+      AttributeKind::PositionalArguments => Self::PositionalArguments,
+      AttributeKind::Private => Self::Private,
+      AttributeKind::Script => Self::Script({
         let mut arguments = arguments.into_iter();
         arguments.next().map(|command| Interpreter {
           command,
           arguments: arguments.collect(),
         })
       }),
-      AttributeDiscriminant::Shell => Self::Shell,
-      AttributeDiscriminant::Unix => Self::Unix,
-      AttributeDiscriminant::Windows => Self::Windows,
+      AttributeKind::Shell => Self::Shell,
+      AttributeKind::Unix => Self::Unix,
+      AttributeKind::Windows => Self::Windows,
     };
 
-    if let Some((_name, (keyword_name, _literal))) = keyword_arguments.pop_first() {
-      return Err(
-        keyword_name.error(CompileErrorKind::UnknownAttributeKeyword {
-          attribute: name.lexeme(),
-          keyword: keyword_name.lexeme(),
-        }),
-      );
+    if let Some((_name, (key, _literal))) = keyword_arguments.pop_first() {
+      return Err(key.error(CompileErrorKind::UnknownAttributeKey {
+        attribute: name.lexeme(),
+        key: key.lexeme(),
+      }));
     }
 
     Ok(attribute)
   }
 
   fn remove_required(
-    keyword_arguments: &mut BTreeMap<&'src str, (Name<'src>, Option<StringLiteral<'src>>)>,
+    keyword_arguments: &mut BTreeMap<&'src str, (Name<'src>, Option<Expression<'src>>)>,
     key: &'src str,
-  ) -> CompileResult<'src, Option<(Name<'src>, StringLiteral<'src>)>> {
-    let Some((key, literal)) = keyword_arguments.remove(key) else {
+  ) -> CompileResult<'src, Option<(Name<'src>, Expression<'src>)>> {
+    let Some((key, expression)) = keyword_arguments.remove(key) else {
       return Ok(None);
     };
 
-    let literal =
-      literal.ok_or_else(|| key.error(CompileErrorKind::AttributeKeyMissingValue { key }))?;
+    let expression =
+      expression.ok_or_else(|| key.error(CompileErrorKind::AttributeKeyMissingValue { key }))?;
 
-    Ok(Some((key, literal)))
+    Ok(Some((key, expression)))
   }
 
-  pub(crate) fn discriminant(&self) -> AttributeDiscriminant {
+  fn require_string_literal(
+    attribute: Name<'src>,
+    key: Name<'src>,
+    expression: Expression<'src>,
+  ) -> CompileResult<'src, StringLiteral<'src>> {
+    let Expression::StringLiteral { string_literal } = expression else {
+      return Err(key.error(CompileErrorKind::AttributeArgumentExpression {
+        attribute: attribute.lexeme(),
+      }));
+    };
+
+    Ok(string_literal)
+  }
+
+  pub(crate) fn kind(&self) -> AttributeKind {
     self.into()
   }
 
@@ -339,12 +432,16 @@ impl Display for Attribute<'_> {
     match self {
       Self::Arg {
         flag,
-        help,
+        help: _,
+        help_property,
         long,
         long_key,
+        multiple,
         name,
-        pattern,
+        pattern: _,
+        pattern_property,
         short,
+        short_key,
         value,
       } => {
         write!(f, "({name}")?;
@@ -355,12 +452,14 @@ impl Display for Attribute<'_> {
           write!(f, ", long={long}")?;
         }
 
-        if let Some(short) = short {
+        if short_key.is_some() {
+          write!(f, ", short")?;
+        } else if let Some(short) = short {
           write!(f, ", short={short}")?;
         }
 
-        if let Some(pattern) = pattern {
-          write!(f, ", pattern={}", pattern.token.lexeme())?;
+        if let Some((_key, pattern)) = pattern_property {
+          write!(f, ", pattern={pattern}")?;
         }
 
         if let Some(value) = value {
@@ -371,7 +470,11 @@ impl Display for Attribute<'_> {
           write!(f, ", flag")?;
         }
 
-        if let Some(help) = help {
+        if multiple.is_some() {
+          write!(f, ", multiple")?;
+        }
+
+        if let Some((_key, help)) = help_property {
           write!(f, ", help={help}")?;
         }
 
@@ -398,11 +501,44 @@ impl Display for Attribute<'_> {
       | Self::Shell
       | Self::Unix
       | Self::Windows => {}
-      Self::Confirm(Some(argument)) | Self::WorkingDirectory(argument) => {
+      Self::Cache {
+        extra,
+        inputs,
+        outputs,
+      } => {
+        let mut arguments = Vec::new();
+        if let Some(extra) = extra {
+          arguments.push(format!("extra={extra}"));
+        }
+        if let Some(inputs) = inputs {
+          arguments.push(format!("inputs={inputs}"));
+        }
+        if let Some(outputs) = outputs {
+          arguments.push(format!("outputs={outputs}"));
+        }
+        if !arguments.is_empty() {
+          write!(f, "({})", arguments.join(", "))?;
+        }
+      }
+      Self::Confirm(Some(argument))
+      | Self::Doc(Some(argument))
+      | Self::WorkingDirectory(argument) => {
         write!(f, "({argument})")?;
       }
-      Self::Doc(Some(argument)) | Self::Extension(argument) | Self::Group(argument) => {
+      Self::Extension(argument) | Self::Group(argument) => {
         write!(f, "({argument})")?;
+      }
+      Self::Continue(signals) => {
+        if !signals.is_empty() {
+          write!(f, "(")?;
+          for (i, signal) in signals.iter().enumerate() {
+            if i > 0 {
+              write!(f, ", ")?;
+            }
+            write!(f, "\"{signal}\"")?;
+          }
+          write!(f, ")")?;
+        }
       }
       Self::Env(key, value) => write!(f, "({key}, {value})")?,
       Self::Metadata(arguments) => {

@@ -13,9 +13,14 @@ pub(crate) use {
     assignment::Assignment,
     assignment_resolver::AssignmentResolver,
     ast::Ast,
-    attribute::{Attribute, AttributeDiscriminant},
+    attribute::{Attribute, AttributeKind},
     attribute_set::AttributeSet,
     binding::Binding,
+    cache::Cache,
+    cache_entry::CacheEntry,
+    cache_key::CacheKey,
+    cache_lock::CacheLock,
+    cache_status::CacheStatus,
     color::Color,
     color_display::ColorDisplay,
     command_color::CommandColor,
@@ -29,6 +34,7 @@ pub(crate) use {
     config::Config,
     config_error::ConfigError,
     const_error::ConstError,
+    const_eval_error::ConstEvalError,
     constants::constants,
     count::Count,
     delimiter::Delimiter,
@@ -38,6 +44,7 @@ pub(crate) use {
     dump_format::DumpFormat,
     element::Element,
     enclosure::Enclosure,
+    environment::Environment,
     error::Error,
     evaluate_format::EvaluateFormat,
     evaluator::Evaluator,
@@ -52,10 +59,11 @@ pub(crate) use {
     interpreter::Interpreter,
     invocation::Invocation,
     invocation_parser::InvocationParser,
-    item::Item,
+    item::{Item, ItemKind},
     justfile::Justfile,
     keyed::Keyed,
     keyword::Keyword,
+    layer::Layer,
     lexer::Lexer,
     line::Line,
     list::List,
@@ -107,6 +115,7 @@ pub(crate) use {
     string_kind::StringKind,
     string_literal::StringLiteral,
     string_state::StringState,
+    style::Style,
     subcommand::Subcommand,
     suggestion::Suggestion,
     switch::Switch,
@@ -121,30 +130,33 @@ pub(crate) use {
     use_color::UseColor,
     value::Value,
     verbosity::Verbosity,
+    version::Version,
     warning::Warning,
     which::which,
   },
   camino::Utf8Path,
   clap::{CommandFactory, FromArgMatches, Parser as _, ValueEnum},
   clap_complete::{ArgValueCompleter, CompletionCandidate, PathCompleter, engine::ValueCompleter},
+  digest_io::HashWriter,
   lexiclean::Lexiclean,
   libc::EXIT_FAILURE,
   rand::seq::IndexedRandom,
   regex::Regex,
   serde::{
-    Deserialize, Serialize, Serializer,
+    Deserialize, Deserializer, Serialize, Serializer,
     ser::{SerializeMap, SerializeSeq, SerializeStruct},
   },
+  sha2::{Digest, Sha256},
   snafu::{ResultExt, Snafu},
   std::{
     borrow::{Borrow, Cow},
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, btree_map},
     env::{self, VarError},
     ffi::{OsStr, OsString},
     fmt::{self, Debug, Display, Formatter},
     fs::{self, File},
-    io::{self, Write},
+    io::{self, Sink, Write},
     iter::{self, FromIterator},
     mem,
     ops::Deref,
@@ -179,9 +191,13 @@ type SearchResult<T> = Result<T, SearchError>;
 type StringResult = Result<String, String>;
 type ValueResult = Result<Value, String>;
 
+type ModuleAlias<'src> = Alias<'src, Modulepath>;
+type RecipeAlias<'src> = Alias<'src, Arc<Recipe<'src>>>;
+
 const JUST_DIRECTORY: &str = "just";
 const RECURSION_LIMIT: usize = if cfg!(windows) { 48 } else { 256 };
 const TEMPDIR_PREFIX: &str = "just-";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 #[macro_use]
@@ -212,6 +228,11 @@ mod ast;
 mod attribute;
 mod attribute_set;
 mod binding;
+mod cache;
+mod cache_entry;
+mod cache_key;
+mod cache_lock;
+mod cache_status;
 mod color;
 mod color_display;
 mod command_color;
@@ -225,6 +246,7 @@ mod conditional_operator;
 mod config;
 mod config_error;
 mod const_error;
+mod const_eval_error;
 mod constants;
 mod count;
 mod delimiter;
@@ -234,6 +256,7 @@ mod disabled;
 mod dump_format;
 mod element;
 mod enclosure;
+mod environment;
 mod error;
 mod evaluate_format;
 mod evaluator;
@@ -253,6 +276,7 @@ mod item;
 mod justfile;
 mod keyed;
 mod keyword;
+mod layer;
 mod lexer;
 mod line;
 mod list;
@@ -306,6 +330,7 @@ mod string_delimiter;
 mod string_kind;
 mod string_literal;
 mod string_state;
+mod style;
 mod subcommand;
 mod suggestion;
 mod switch;
@@ -321,5 +346,6 @@ mod usage;
 mod use_color;
 mod value;
 mod verbosity;
+mod version;
 mod warning;
 mod which;

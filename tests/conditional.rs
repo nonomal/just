@@ -175,7 +175,7 @@ fn unexpected_op() {
     )
     .stderr(
       "
-        error: expected '&&', '!=', '!~', '||', '{', '==', '=~', '+', or '/', but found identifier
+        error: expected '&&', '!=', '!~', '||', '{', '==', '=~', '+', '++', or '/', but found identifier
          ——▶ justfile:1:12
           │
         1 │ a := if '' a '' { '' } else { b }
@@ -275,7 +275,7 @@ fn if_without_else_is_empty_when_condition_is_false() {
           @echo '{{ show(if 'a' == 'b' { 'baz' }) }}'
       ",
     )
-    .env("JUST_UNSTABLE", "1")
+    .unstable()
     .arg("foo")
     .stdout("[]\n")
     .success();
@@ -292,7 +292,7 @@ fn if_without_else_is_then_when_condition_is_true() {
           @echo '{{ show(if 'a' == 'a' { 'baz' }) }}'
       ",
     )
-    .env("JUST_UNSTABLE", "1")
+    .unstable()
     .arg("foo")
     .stdout("\"baz\"\n")
     .success();
@@ -309,7 +309,7 @@ fn else_if_without_final_else_is_empty_when_all_conditions_are_false() {
           @echo '{{ show(if 'a' == 'b' { 'baz' } else if 'a' == 'c' { 'bob' }) }}'
       ",
     )
-    .env("JUST_UNSTABLE", "1")
+    .unstable()
     .arg("foo")
     .stdout("[]\n")
     .success();

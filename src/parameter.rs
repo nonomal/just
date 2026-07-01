@@ -8,12 +8,14 @@ pub(crate) struct Parameter<'src> {
   pub(crate) help: Option<String>,
   pub(crate) kind: ParameterKind,
   pub(crate) long: Option<String>,
+  #[serde(skip)]
+  pub(crate) multiple: bool,
   pub(crate) name: Name<'src>,
   #[serde(skip)]
   pub(crate) number: Number,
-  pub(crate) pattern: Option<Pattern<'src>>,
+  pub(crate) pattern: Option<Pattern>,
   pub(crate) short: Option<char>,
-  pub(crate) value: Option<String>,
+  pub(crate) value: Option<Expression<'src>>,
 }
 
 impl<'src> Parameter<'src> {
@@ -56,7 +58,7 @@ impl ColorDisplay for Parameter<'_> {
       write!(f, "$")?;
     }
     write!(f, "{}", color.parameter().paint(self.name.lexeme()))?;
-    if let Some(ref default) = self.default {
+    if let Some(default) = &self.default {
       write!(f, "={}", color.string().paint(&default.to_string()))?;
     }
     Ok(())
